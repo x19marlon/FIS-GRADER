@@ -22,7 +22,7 @@ todos_existentes = all(
 
 if todos_existentes:
     # Rúbrica para el LLM
-    ruta_rubrica = "calificador/classroom/rubrica.md"
+    ruta_rubrica = "calificador/.github/classroom/rubrica.md"
 
     with open(ruta_rubrica, "r", encoding="utf-8") as fichero:
         rubrica = fichero.read()
