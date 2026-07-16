@@ -29,19 +29,10 @@
         matrix:
           include:
             - id: G1
-              repository: organizacion/fis-G1
-
-            - id: G2
-              repository: organizacion/fis-G2
+              repository: puj-course/FIS_2610_3513_G1
 
             - id: G3
-              repository: organizacion/fis-G3
-
-            - id: G4
-              repository: organizacion/fis-G4
-
-            - id: G5
-              repository: organizacion/fis-G5
+              repository: puj-course/FIS_2610_3513_G3
 
       steps:
         # Descarga el repositorio con los archivos necesarios.
@@ -67,27 +58,26 @@
           with:
             python-version: "3.12"
 
+      # importantisimo 
         - name: Instalar dependencias
           run: |
             python -m pip install --upgrade pip
             python -m pip install openai
 
-        - name: Verificar archivos requeridos
-          run: |
-           
-
-        - name: Evaluar archivo con el deepseek
+        - name: Verificar y evaluar archivo
           env:
             DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
             STUDENT_ID: ${{ matrix.id }}
             STUDENT_REPOSITORY: ${{ matrix.repository }}
           run: |
-           
-
+            python calificador/classroom/grader.py \
+              --repository estudiante \
+              --required-files src/main/java/com/skillstack/devhub/builder/ProgressBuilder.java
+            
         - name: Guardar resultado
           if: always()
           uses: actions/upload-artifact@v7
           with:
             name: resultado-${{ matrix.id }}
-            path: resultado-${{ matrix.id }}.json
+            path: resultado.json
             if-no-files-found: warn
