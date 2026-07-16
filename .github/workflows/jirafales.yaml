@@ -70,7 +70,7 @@
             STUDENT_ID: ${{ matrix.id }}
             STUDENT_REPOSITORY: ${{ matrix.repository }}
           run: |
-            python calificador/classroom/grader.py \
+            python calificador/.github/classroom/grader.py \
               --repository estudiante \
               --required-files src/main/java/com/skillstack/devhub/builder/ProgressBuilder.java
             
