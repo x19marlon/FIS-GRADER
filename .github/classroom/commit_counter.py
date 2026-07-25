@@ -568,13 +568,15 @@ def main() -> int:
     print("Reportes generados correctamente:")
     print(f"- Autores: {authors_output}")
     print(f"- Repositorio: {repository_output}")
+
     print(
         "Commits encontrados durante el periodo: "
-        f"{repository_report['total_commits_periodo']}"
+        f"{repository_report['resumen']['total_commits_periodo']}"
     )
+
     print(
         "Autores encontrados durante el periodo: "
-        f"{repository_report['total_autores_periodo']}"
+        f"{repository_report['resumen']['total_autores_periodo']}"
     )
 
     return 0
