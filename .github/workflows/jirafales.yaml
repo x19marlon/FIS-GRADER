@@ -133,13 +133,13 @@ jobs:
       # ==========================================
 
       # Artefacto 1: resultado del grader.
-      - name: Guardar resultado del grader
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: resultado-${{ matrix.id }}
-          path: resultado.json
-          if-no-files-found: warn
+      # - name: Guardar resultado del grader
+      #   if: always()
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: resultado-${{ matrix.id }}
+      #     path: resultado.json
+      #     if-no-files-found: warn
 
       # Artefacto 2: commits agrupados por autor.
       - name: Guardar reporte de autores
