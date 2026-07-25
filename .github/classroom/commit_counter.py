@@ -2,7 +2,7 @@ import argparse
 import json
 import subprocess
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -175,18 +175,105 @@ def obtener_total_historico(repository: Path) -> int:
     return int(output or 0)
 
 
+
+def es_merge_commit(repository: Path, commit_hash: str) -> bool:
+    """Indica si un commit tiene más de un padre."""
+
+    output = ejecutar_git(
+        repository,
+        [
+            "rev-list",
+            "--parents",
+            "-n",
+            "1",
+            commit_hash,
+        ],
+    )
+
+    # El primer elemento es el hash del commit.
+    # Si hay más de dos elementos, el commit tiene dos o más padres.
+    return len(output.split()) > 2
+
+
+def clasificar_mensaje_commit(message: str) -> str:
+    """Clasifica el mensaje usando prefijos comunes de Conventional Commits."""
+
+    normalized = message.strip().lower()
+
+    prefixes = (
+        "feat",
+        "fix",
+        "docs",
+        "style",
+        "refactor",
+        "test",
+        "chore",
+        "build",
+        "ci",
+        "perf",
+        "revert",
+    )
+
+    for prefix in prefixes:
+        if normalized.startswith(f"{prefix}:") or normalized.startswith(
+            f"{prefix}("
+        ):
+            return prefix
+
+    return "otro"
+
+
+def obtener_nombre_repositorio(repository: Path) -> str:
+    """Obtiene el nombre del repositorio desde la URL remota o la carpeta."""
+
+    try:
+        remote_url = ejecutar_git(
+            repository,
+            [
+                "config",
+                "--get",
+                "remote.origin.url",
+            ],
+        )
+    except RuntimeError:
+        remote_url = ""
+
+    if remote_url:
+        name = remote_url.rstrip("/").split("/")[-1]
+
+        if name.endswith(".git"):
+            name = name[:-4]
+
+        if name:
+            return name
+
+    return repository.name
+
+
 def generar_reportes(
     repository: Path,
     days: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Genera el reporte por autor y el resumen del repositorio."""
+    """
+    Genera dos reportes complementarios:
+
+    - autores.json: detalle de commits agrupados por correo.
+    - repositorio.json: resumen estadístico del repositorio sin repetir
+      la lista completa de commits.
+    """
 
     commit_hashes = obtener_commits_periodo(repository, days)
     remote_branches = obtener_ramas_remotas(repository)
 
     users: dict[str, dict[str, Any]] = {}
     branch_commit_counts: defaultdict[str, int] = defaultdict(int)
-    commits_details: list[dict[str, Any]] = []
+
+    commits_by_day: Counter[str] = Counter()
+    commit_types: Counter[str] = Counter()
+    commits_by_author: Counter[str] = Counter()
+
+    commit_dates: list[str] = []
+    merge_commits = 0
 
     for commit_hash in commit_hashes:
         commit = obtener_datos_commit(repository, commit_hash)
@@ -195,10 +282,10 @@ def generar_reportes(
         if not commit_branches:
             commit_branches = ["sin_rama_remota"]
 
-        commit["ramas"] = commit_branches
-        commits_details.append(commit)
-
         email = commit["correo"]
+        author_name = commit["autor"]
+        commit_date = commit["fecha"]
+        commit_day = commit_date[:10]
 
         if email not in users:
             users[email] = {
@@ -211,7 +298,7 @@ def generar_reportes(
 
         user = users[email]
 
-        user["nombres_utilizados"].add(commit["autor"])
+        user["nombres_utilizados"].add(author_name)
         user["cantidad_commits"] += 1
 
         for branch in commit_branches:
@@ -222,11 +309,19 @@ def generar_reportes(
             {
                 "hash": commit["hash"],
                 "hash_corto": commit["hash_corto"],
-                "fecha": commit["fecha"],
+                "fecha": commit_date,
                 "mensaje": commit["mensaje"],
                 "ramas": commit_branches,
             }
         )
+
+        commits_by_day[commit_day] += 1
+        commits_by_author[email] += 1
+        commit_types[clasificar_mensaje_commit(commit["mensaje"])] += 1
+        commit_dates.append(commit_date)
+
+        if es_merge_commit(repository, commit_hash):
+            merge_commits += 1
 
     users_list: list[dict[str, Any]] = []
 
@@ -260,6 +355,42 @@ def generar_reportes(
     now = datetime.now(timezone.utc)
     start_date = now - timedelta(days=days)
 
+    total_period_commits = len(commit_hashes)
+    active_days = len(commits_by_day)
+    average_per_active_day = (
+        round(total_period_commits / active_days, 2)
+        if active_days
+        else 0.0
+    )
+    average_per_period_day = round(total_period_commits / days, 2)
+
+    first_commit = min(commit_dates) if commit_dates else None
+    last_commit = max(commit_dates) if commit_dates else None
+
+    author_summary: dict[str, dict[str, Any]] = {}
+
+    for user in users_list:
+        preferred_name = (
+            user["nombres_utilizados"][0]
+            if user["nombres_utilizados"]
+            else user["correo"]
+        )
+
+        author_summary[user["correo"]] = {
+            "nombre": preferred_name,
+            "cantidad_commits": user["cantidad_commits"],
+            "porcentaje_participacion": (
+                round(
+                    user["cantidad_commits"]
+                    / total_period_commits
+                    * 100,
+                    2,
+                )
+                if total_period_commits
+                else 0.0
+            ),
+        }
+
     authors_report = {
         "periodo": {
             "dias": days,
@@ -276,30 +407,66 @@ def generar_reportes(
     }
 
     repository_report = {
+        "repositorio": obtener_nombre_repositorio(repository),
         "periodo": {
             "dias": days,
             "desde": start_date.isoformat(),
             "hasta": now.isoformat(),
         },
-        "total_commits_periodo": len(commit_hashes),
-        "total_commits_historicos": obtener_total_historico(repository),
-        "total_autores_periodo": len(users_list),
-        "ramas_remotas_detectadas": remote_branches,
+        "resumen": {
+            "total_commits_periodo": total_period_commits,
+            "total_commits_historicos": obtener_total_historico(repository),
+            "total_autores_periodo": len(users_list),
+            "total_ramas_remotas": len(remote_branches),
+            "dias_con_actividad": active_days,
+            "dias_sin_actividad": max(days - active_days, 0),
+            "promedio_commits_por_dia_activo": average_per_active_day,
+            "promedio_commits_por_dia_del_periodo": average_per_period_day,
+            "primer_commit_periodo": first_commit,
+            "ultimo_commit_periodo": last_commit,
+            "commits_merge": merge_commits,
+            "commits_no_merge": total_period_commits - merge_commits,
+        },
+        "participacion_por_autor": dict(
+            sorted(
+                author_summary.items(),
+                key=lambda item: (
+                    -item[1]["cantidad_commits"],
+                    item[0],
+                ),
+            )
+        ),
+        "actividad_por_dia": dict(
+            sorted(commits_by_day.items())
+        ),
         "actividad_por_rama": dict(
             sorted(
                 branch_commit_counts.items(),
                 key=lambda item: (-item[1], item[0]),
             )
         ),
-        "commits": sorted(
-            commits_details,
-            key=lambda commit: commit["fecha"],
-            reverse=True,
+        "tipos_de_commit": dict(
+            sorted(
+                commit_types.items(),
+                key=lambda item: (-item[1], item[0]),
+            )
         ),
-        "advertencia": (
-            "Un commit puede contarse dentro de varias ramas si actualmente "
-            "es alcanzable desde todas ellas."
-        ),
+        "ramas_remotas_detectadas": remote_branches,
+        "advertencias": [
+            (
+                "Un commit puede contarse dentro de varias ramas si "
+                "actualmente es alcanzable desde todas ellas."
+            ),
+            (
+                "La suma de actividad_por_rama puede superar el total de "
+                "commits del periodo porque un mismo commit puede pertenecer "
+                "a varias ramas."
+            ),
+            (
+                "La clasificación de tipos de commit se basa únicamente "
+                "en prefijos como feat:, fix:, docs: o refactor:."
+            ),
+        ],
     }
 
     return authors_report, repository_report
