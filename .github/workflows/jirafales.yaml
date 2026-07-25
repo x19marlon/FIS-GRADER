@@ -112,16 +112,16 @@ jobs:
       # 4. EJECUTAR CALIFICADOR
       # ==========================================
 
-      - name: Verificar y evaluar archivo
-        env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          STUDENT_ID: ${{ matrix.id }}
-          STUDENT_REPOSITORY: ${{ matrix.repository }}
+      # - name: Verificar y evaluar archivo
+      #   env:
+      #     DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      #     STUDENT_ID: ${{ matrix.id }}
+      #     STUDENT_REPOSITORY: ${{ matrix.repository }}
 
-          # Rutas de los reportes, por si grader.py
-          # necesita leerlos posteriormente.
-          AUTHORS_REPORT: autores-${{ matrix.id }}.json
-          REPOSITORY_REPORT: repositorio-${{ matrix.id }}.json
+      #     # Rutas de los reportes, por si grader.py
+      #     # necesita leerlos posteriormente.
+      #     AUTHORS_REPORT: autores-${{ matrix.id }}.json
+      #     REPOSITORY_REPORT: repositorio-${{ matrix.id }}.json
 
         # run: |
         #   python calificador/.github/classroom/grader.py \
