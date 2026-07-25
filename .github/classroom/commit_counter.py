@@ -338,8 +338,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--days",
         type=int,
-        default=7,
-        help="Cantidad de días que serán analizados. Por defecto: 7.",
+        default=65,
+        help="Cantidad de días que serán analizados. Por defecto: 65.",
     )
 
     parser.add_argument(
