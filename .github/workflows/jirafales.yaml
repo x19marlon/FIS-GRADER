@@ -29,9 +29,15 @@ jobs:
         include:
           - id: G1
             repository: puj-course/FIS_2610_3513_G1
-
+            
+          - id: G2
+            repository: puj-course/FIS_2610_3513_G2
+            
           - id: G3
             repository: puj-course/FIS_2610_3513_G3
+
+          - id: G4
+            repository: puj-course/FIS_2610_3513_G4
 
     steps:
       # ==========================================
