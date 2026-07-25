@@ -96,7 +96,7 @@ jobs:
         run: |
           python "${{ steps.buscar-script.outputs.script }}" \
             --repository estudiante \
-            --days 7 \
+            --days 65 \
             --authors-output "autores-${{ matrix.id }}.json" \
             --repository-output "repositorio-${{ matrix.id }}.json"
 
