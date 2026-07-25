@@ -1,83 +1,185 @@
-# 为了使工作完美,初始化变量时必须以大写字母开头
+# __________________________________________
+# v1.2.1
+# __________________________________________
 
-  # __________________________________________
-  # v1.0.0
-  # __________________________________________
+name: Calificador de estudiante
 
-  name: Calificador de estudiante 
+on:
+  # Permite ejecutarlo manualmente.
+  workflow_dispatch:
 
-  on:
-    # Permite ejecutarlo manualmente.
-    workflow_dispatch:
+  # También puede ejecutarse automáticamente.
+  schedule:
+    # Todos los lunes a las 9:00 a. m. de Colombia.
+    - cron: "0 14 * * 1"
 
-    # También puede ejecutarse automáticamente.
-    schedule:
-      # Todos los lunes a las 9:00 a. m. de Colombia.
-      - cron: "0 14 * * 1"
+permissions:
+  contents: read
 
-  permissions:
-    contents: read
+jobs:
+  evaluar:
+    name: Evaluar ${{ matrix.id }}
+    runs-on: ubuntu-latest
 
-  jobs:
-    evaluar:
-      name: Evaluar ${{ matrix.id }}
-      runs-on: ubuntu-latest
+    strategy:
+      # Si un grupo falla, los demás continúan.
+      fail-fast: false
 
-      strategy:
-      # En caso de que un estudiante tenga errores, no se detendrá la ejecución de los demás.
-        fail-fast: false
-        matrix:
-          include:
-            - id: G1
-              repository: puj-course/FIS_2610_3513_G1
+      matrix:
+        include:
+          - id: G1
+            repository: puj-course/FIS_2610_3513_G1
 
-            - id: G3
-              repository: puj-course/FIS_2610_3513_G3
+          - id: G3
+            repository: puj-course/FIS_2610_3513_G3
 
-      steps:
-        # Descarga el repositorio con los archivos necesarios.
-        - name: Descargar evaluador
-          uses: actions/checkout@v7
-          with:
-            path: calificador
+    steps:
+      # ==========================================
+      # 1. DESCARGAR REPOSITORIOS
+      # ==========================================
 
-        # Descarga el repositorio del estudiante seleccionado por la matriz.
-        - name: Descargar repositorio del estudiante
-          uses: actions/checkout@v7
-          with:
-            repository: ${{ matrix.repository }}
-            token: ${{ secrets.STUDENT_REPOS_TOKEN }}
-            path: estudiante
-            # descargar ultimo commit, 0 si queremos todo el historial
-            fetch-depth: 1
-            # run: git -C estudiante log --oneline
-            persist-credentials: false
+      - name: Descargar evaluador
+        uses: actions/checkout@v4
+        with:
+          path: calificador
 
-        - name: Configurar Python
-          uses: actions/setup-python@v6
-          with:
-            python-version: "3.12"
+      - name: Descargar repositorio del estudiante
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repository }}
+          token: ${{ secrets.STUDENT_REPOS_TOKEN }}
+          path: estudiante
 
-      # importantisimo 
-        - name: Instalar dependencias
-          run: |
-            python -m pip install --upgrade pip
-            python -m pip install openai
+          # Necesario para revisar todo el historial.
+          fetch-depth: 0
 
-        - name: Verificar y evaluar archivo
-          env:
-            DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-            STUDENT_ID: ${{ matrix.id }}
-            STUDENT_REPOSITORY: ${{ matrix.repository }}
-          run: |
-            python calificador/.github/classroom/grader.py \
-              --repository estudiante \
-              --required-files src/main/java/com/skillstack/devhub/builder/ProgressBuilder.java
-            
-        - name: Guardar resultado
-          if: always()
-          uses: actions/upload-artifact@v7
-          with:
-            name: resultado-${{ matrix.id }}
-            path: resultado.json
-            if-no-files-found: warn
+          persist-credentials: false
+
+      # ==========================================
+      # 2. CONFIGURAR PYTHON
+      # ==========================================
+
+      - name: Configurar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verificar Python
+        run: |
+          python --version
+
+      # ==========================================
+      # 3. ENCONTRAR Y EJECUTAR EL CONTADOR
+      # ==========================================
+
+      - name: Buscar script contador de commits
+        id: buscar-script
+        shell: bash
+        run: |
+          echo "Archivos disponibles en el evaluador:"
+          find calificador -type f | sort
+
+          SCRIPT=$(find calificador \
+            -type f \
+            \( -name "commit_report.py" -o -name "commit_counter.py" \) \
+            | head -n 1)
+
+          if [ -z "$SCRIPT" ]; then
+            echo "::error::No se encontró commit_report.py ni commit_counter.py dentro del repositorio evaluador."
+            exit 1
+          fi
+
+          echo "Script encontrado: $SCRIPT"
+          echo "script=$SCRIPT" >> "$GITHUB_OUTPUT"
+
+      - name: Generar reportes de commits
+        run: |
+          python "${{ steps.buscar-script.outputs.script }}" \
+            --repository estudiante \
+            --days 65 \
+            --authors-output "autores-${{ matrix.id }}.json" \
+            --repository-output "repositorio-${{ matrix.id }}.json"
+
+      - name: Verificar archivos generados
+        run: |
+          echo "Archivos JSON generados:"
+          find . -maxdepth 2 -type f -name "*.json" | sort
+
+          if [ ! -f "autores-${{ matrix.id }}.json" ]; then
+            echo "::error::No se generó autores-${{ matrix.id }}.json"
+            exit 1
+          fi
+
+          if [ ! -f "repositorio-${{ matrix.id }}.json" ]; then
+            echo "::error::No se generó repositorio-${{ matrix.id }}.json"
+            exit 1
+          fi
+
+      - name: Mostrar reporte de autores
+        run: |
+          echo "=========================================="
+          echo "REPORTE DE AUTORES - ${{ matrix.id }}"
+          echo "=========================================="
+          cat "autores-${{ matrix.id }}.json"
+
+      - name: Mostrar reporte del repositorio
+        run: |
+          echo "=========================================="
+          echo "REPORTE DEL REPOSITORIO - ${{ matrix.id }}"
+          echo "=========================================="
+          cat "repositorio-${{ matrix.id }}.json"
+
+      # ==========================================
+      # 4. EJECUTAR CALIFICADOR
+      # ==========================================
+      #
+      # Esta parte está desactivada para no gastar
+      # tokens de la API.
+      #
+      # Para activarla, descomenta ambos pasos.
+
+      # - name: Instalar dependencias del calificador
+      #   run: |
+      #     python -m pip install --upgrade pip
+      #     python -m pip install openai
+
+      # - name: Verificar y evaluar archivo
+      #   env:
+      #     DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      #     STUDENT_ID: ${{ matrix.id }}
+      #     STUDENT_REPOSITORY: ${{ matrix.repository }}
+      #     AUTHORS_REPORT: autores-${{ matrix.id }}.json
+      #     REPOSITORY_REPORT: repositorio-${{ matrix.id }}.json
+      #   run: |
+      #     python calificador/.github/classroom/grader.py \
+      #       --repository estudiante \
+      #       --required-files src/main/java/com/skillstack/devhub/builder/ProgressBuilder.java
+
+      # ==========================================
+      # 5. SUBIR ARTEFACTOS
+      # ==========================================
+
+      - name: Guardar reporte de autores
+        uses: actions/upload-artifact@v4
+        with:
+          name: autores-${{ matrix.id }}
+          path: autores-${{ matrix.id }}.json
+          if-no-files-found: error
+
+      - name: Guardar reporte del repositorio
+        uses: actions/upload-artifact@v4
+        with:
+          name: repositorio-${{ matrix.id }}
+          path: repositorio-${{ matrix.id }}.json
+          if-no-files-found: error
+
+      # Artefacto del grader desactivado mientras
+      # el calificador esté comentado.
+
+      # - name: Guardar resultado del grader
+      #   if: always()
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: resultado-${{ matrix.id }}
+      #     path: resultado.json
+      #     if-no-files-found: warn
