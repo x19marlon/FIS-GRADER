@@ -1,5 +1,5 @@
 # __________________________________________
-# v1.2.0
+# v1.2.1
 # __________________________________________
 
 name: Calificador de estudiante
@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      # Si un grupo falla, los demás continúan ejecutándose.
+      # Si un grupo falla, los demás continúan.
       fail-fast: false
 
       matrix:
@@ -50,8 +50,7 @@ jobs:
           token: ${{ secrets.STUDENT_REPOS_TOKEN }}
           path: estudiante
 
-          # Descarga todo el historial de commits,
-          # ramas y etiquetas.
+          # Necesario para revisar todo el historial.
           fetch-depth: 0
 
           persist-credentials: false
@@ -65,74 +64,118 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Instalar dependencias
+      - name: Verificar Python
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install openai
+          python --version
 
       # ==========================================
-      # 3. GENERAR REPORTES DE COMMITS
+      # 3. ENCONTRAR Y EJECUTAR EL CONTADOR
       # ==========================================
+
+      - name: Buscar script contador de commits
+        id: buscar-script
+        shell: bash
+        run: |
+          echo "Archivos disponibles en el evaluador:"
+          find calificador -type f | sort
+
+          SCRIPT=$(find calificador \
+            -type f \
+            \( -name "commit_report.py" -o -name "commit_counter.py" \) \
+            | head -n 1)
+
+          if [ -z "$SCRIPT" ]; then
+            echo "::error::No se encontró commit_report.py ni commit_counter.py dentro del repositorio evaluador."
+            exit 1
+          fi
+
+          echo "Script encontrado: $SCRIPT"
+          echo "script=$SCRIPT" >> "$GITHUB_OUTPUT"
 
       - name: Generar reportes de commits
         run: |
-          python "calificador/.github/classroom/commit counter/commit_report.py" \
+          python "${{ steps.buscar-script.outputs.script }}" \
             --repository estudiante \
             --days 7 \
-            --authors-output autores-${{ matrix.id }}.json \
-            --repository-output repositorio-${{ matrix.id }}.json
+            --authors-output "autores-${{ matrix.id }}.json" \
+            --repository-output "repositorio-${{ matrix.id }}.json"
+
+      - name: Verificar archivos generados
+        run: |
+          echo "Archivos JSON generados:"
+          find . -maxdepth 2 -type f -name "*.json" | sort
+
+          if [ ! -f "autores-${{ matrix.id }}.json" ]; then
+            echo "::error::No se generó autores-${{ matrix.id }}.json"
+            exit 1
+          fi
+
+          if [ ! -f "repositorio-${{ matrix.id }}.json" ]; then
+            echo "::error::No se generó repositorio-${{ matrix.id }}.json"
+            exit 1
+          fi
 
       - name: Mostrar reporte de autores
-        if: always()
         run: |
           echo "=========================================="
           echo "REPORTE DE AUTORES - ${{ matrix.id }}"
           echo "=========================================="
-
-          if [ -f "autores-${{ matrix.id }}.json" ]; then
-            cat "autores-${{ matrix.id }}.json"
-          else
-            echo "No se generó el archivo de autores."
-          fi
+          cat "autores-${{ matrix.id }}.json"
 
       - name: Mostrar reporte del repositorio
-        if: always()
         run: |
           echo "=========================================="
           echo "REPORTE DEL REPOSITORIO - ${{ matrix.id }}"
           echo "=========================================="
-
-          if [ -f "repositorio-${{ matrix.id }}.json" ]; then
-            cat "repositorio-${{ matrix.id }}.json"
-          else
-            echo "No se generó el archivo del repositorio."
-          fi
+          cat "repositorio-${{ matrix.id }}.json"
 
       # ==========================================
       # 4. EJECUTAR CALIFICADOR
       # ==========================================
+      #
+      # Esta parte está desactivada para no gastar
+      # tokens de la API.
+      #
+      # Para activarla, descomenta ambos pasos.
+
+      # - name: Instalar dependencias del calificador
+      #   run: |
+      #     python -m pip install --upgrade pip
+      #     python -m pip install openai
 
       # - name: Verificar y evaluar archivo
       #   env:
       #     DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       #     STUDENT_ID: ${{ matrix.id }}
       #     STUDENT_REPOSITORY: ${{ matrix.repository }}
-
-      #     # Rutas de los reportes, por si grader.py
-      #     # necesita leerlos posteriormente.
       #     AUTHORS_REPORT: autores-${{ matrix.id }}.json
       #     REPOSITORY_REPORT: repositorio-${{ matrix.id }}.json
-
-        # run: |
-        #   python calificador/.github/classroom/grader.py \
-        #     --repository estudiante \
-        #     --required-files src/main/java/com/skillstack/devhub/builder/ProgressBuilder.java
+      #   run: |
+      #     python calificador/.github/classroom/grader.py \
+      #       --repository estudiante \
+      #       --required-files src/main/java/com/skillstack/devhub/builder/ProgressBuilder.java
 
       # ==========================================
-      # 5. SUBIR LOS TRES ARTEFACTOS
+      # 5. SUBIR ARTEFACTOS
       # ==========================================
 
-      # Artefacto 1: resultado del grader.
+      - name: Guardar reporte de autores
+        uses: actions/upload-artifact@v4
+        with:
+          name: autores-${{ matrix.id }}
+          path: autores-${{ matrix.id }}.json
+          if-no-files-found: error
+
+      - name: Guardar reporte del repositorio
+        uses: actions/upload-artifact@v4
+        with:
+          name: repositorio-${{ matrix.id }}
+          path: repositorio-${{ matrix.id }}.json
+          if-no-files-found: error
+
+      # Artefacto del grader desactivado mientras
+      # el calificador esté comentado.
+
       # - name: Guardar resultado del grader
       #   if: always()
       #   uses: actions/upload-artifact@v4
@@ -140,21 +183,3 @@ jobs:
       #     name: resultado-${{ matrix.id }}
       #     path: resultado.json
       #     if-no-files-found: warn
-
-      # Artefacto 2: commits agrupados por autor.
-      - name: Guardar reporte de autores
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: autores-${{ matrix.id }}
-          path: autores-${{ matrix.id }}.json
-          if-no-files-found: warn
-
-      # Artefacto 3: resumen completo del repositorio.
-      - name: Guardar reporte del repositorio
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: repositorio-${{ matrix.id }}
-          path: repositorio-${{ matrix.id }}.json
-          if-no-files-found: warn
