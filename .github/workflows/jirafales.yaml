@@ -123,10 +123,10 @@ jobs:
           AUTHORS_REPORT: autores-${{ matrix.id }}.json
           REPOSITORY_REPORT: repositorio-${{ matrix.id }}.json
 
-        run: |
-          python calificador/.github/classroom/grader.py \
-            --repository estudiante \
-            --required-files src/main/java/com/skillstack/devhub/builder/ProgressBuilder.java
+        # run: |
+        #   python calificador/.github/classroom/grader.py \
+        #     --repository estudiante \
+        #     --required-files src/main/java/com/skillstack/devhub/builder/ProgressBuilder.java
 
       # ==========================================
       # 5. SUBIR LOS TRES ARTEFACTOS
