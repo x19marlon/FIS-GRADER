@@ -1,185 +1,266 @@
-# __________________________________________
-# v1.2.1
-# __________________________________________
+# ============================================================
+# Student Grader Workflow
+# Version: 1.3
+# ============================================================
 
-name: Calificador de estudiante
+name: Student Grader
 
 on:
-  # Permite ejecutarlo manualmente.
+  # Allows the workflow to be triggered manually from GitHub Actions.
   workflow_dispatch:
 
-  # También puede ejecutarse automáticamente.
+  # Runs automatically every Monday at 9:00 a.m. in Colombia.
   schedule:
-    # Todos los lunes a las 9:00 a. m. de Colombia.
-    - cron: "0 14 * * 1"
+    - cron: "0 9 * * 1"
+      timezone: "America/Bogota"
 
+
+# Apply the minimum permissions required by this workflow.
 permissions:
   contents: read
 
+
+# Centralized configuration values make future changes easier.
+env:
+  PYTHON_VERSION: "3.12"
+  REPORT_DAYS: "65"
+
+
 jobs:
-  evaluar:
-    name: Evaluar ${{ matrix.id }}
+  grade:
+    name: Grade ${{ matrix.id }}
     runs-on: ubuntu-latest
 
+    # Prevent a faulty process from running indefinitely.
+    timeout-minutes: 15
+
     strategy:
-      # Si un grupo falla, los demás continúan.
+      # A failure in one student repository must not stop
+      # the evaluation of the remaining repositories.
       fail-fast: false
 
       matrix:
         include:
           - id: G1
-            repository: puj-course/FIS_2610_3513_G1
+            repository: puj-course/FIS_2630_1204_G1
+          
+          - id: G2 
+            repository: puj-course/FIS_2630_1204_G2
 
           - id: G3
-            repository: puj-course/FIS_2610_3513_G3
+            repository: puj-course/FIS_2630_1204_G3
+
+          - id: G4
+            repository: puj-course/FIS_2630_1204_G4
+
 
     steps:
-      # ==========================================
-      # 1. DESCARGAR REPOSITORIOS
-      # ==========================================
 
-      - name: Descargar evaluador
-        uses: actions/checkout@v4
+      # ========================================================
+      # 1. CHECK OUT REPOSITORIES
+      # ========================================================
+
+      - name: Check out grader repository
+        uses: actions/checkout@v7
         with:
-          path: calificador
+          path: grader
 
-      - name: Descargar repositorio del estudiante
-        uses: actions/checkout@v4
+          # The workflow only needs read access.
+          # Credentials are not required after checkout.
+          persist-credentials: false
+
+
+      - name: Check out student repository
+        uses: actions/checkout@v7
         with:
           repository: ${{ matrix.repository }}
           token: ${{ secrets.STUDENT_REPOS_TOKEN }}
-          path: estudiante
+          path: student
 
-          # Necesario para revisar todo el historial.
+          # Full history is required to analyze commit activity.
           fetch-depth: 0
 
+          # Avoid leaving the PAT available to later workflow steps.
           persist-credentials: false
 
-      # ==========================================
-      # 2. CONFIGURAR PYTHON
-      # ==========================================
 
-      - name: Configurar Python
-        uses: actions/setup-python@v6
+      # ========================================================
+      # 2. SET UP PYTHON
+      # ========================================================
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Verificar Python
-        run: |
-          python --version
 
-      # ==========================================
-      # 3. ENCONTRAR Y EJECUTAR EL CONTADOR
-      # ==========================================
+      - name: Display Python version
+        run: python --version
 
-      - name: Buscar script contador de commits
-        id: buscar-script
+
+      # ========================================================
+      # 3. GENERATE COMMIT REPORTS
+      # ========================================================
+
+      - name: Locate commit analysis script
+        id: locate-script
         shell: bash
+
         run: |
-          echo "Archivos disponibles en el evaluador:"
-          find calificador -type f | sort
+          set -euo pipefail
 
-          SCRIPT=$(find calificador \
-            -type f \
-            \( -name "commit_report.py" -o -name "commit_counter.py" \) \
-            | head -n 1)
+          echo "Available files in the grader repository:"
+          find grader -type f -print | sort
 
-          if [ -z "$SCRIPT" ]; then
-            echo "::error::No se encontró commit_report.py ni commit_counter.py dentro del repositorio evaluador."
+          # Support either accepted script name.
+          # -print -quit avoids unnecessarily scanning the entire tree
+          # after a valid script has been found.
+          SCRIPT="$(
+            find grader \
+              -type f \
+              \( \
+                -name "commit_report.py" \
+                -o -name "commit_counter.py" \
+              \) \
+              -print \
+              -quit
+          )"
+
+          if [[ -z "$SCRIPT" ]]; then
+            echo "::error::Neither commit_report.py nor commit_counter.py was found in the grader repository."
             exit 1
           fi
 
-          echo "Script encontrado: $SCRIPT"
+          echo "Commit analysis script found: $SCRIPT"
+
+          # Expose the script path to subsequent workflow steps.
           echo "script=$SCRIPT" >> "$GITHUB_OUTPUT"
 
-      - name: Generar reportes de commits
-        run: |
-          python "${{ steps.buscar-script.outputs.script }}" \
-            --repository estudiante \
-            --days 65 \
-            --authors-output "autores-${{ matrix.id }}.json" \
-            --repository-output "repositorio-${{ matrix.id }}.json"
 
-      - name: Verificar archivos generados
-        run: |
-          echo "Archivos JSON generados:"
-          find . -maxdepth 2 -type f -name "*.json" | sort
+      - name: Generate commit reports
+        shell: bash
 
-          if [ ! -f "autores-${{ matrix.id }}.json" ]; then
-            echo "::error::No se generó autores-${{ matrix.id }}.json"
+        run: |
+          set -euo pipefail
+
+          python "${{ steps.locate-script.outputs.script }}" \
+            --repository student \
+            --days "$REPORT_DAYS" \
+            --authors-output "authors-${{ matrix.id }}.json" \
+            --repository-output "repository-${{ matrix.id }}.json"
+
+
+      - name: Validate generated reports
+        shell: bash
+
+        run: |
+          set -euo pipefail
+
+          AUTHORS_REPORT="authors-${{ matrix.id }}.json"
+          REPOSITORY_REPORT="repository-${{ matrix.id }}.json"
+
+          echo "Generated JSON files:"
+          find . -maxdepth 2 -type f -name "*.json" -print | sort
+
+          if [[ ! -f "$AUTHORS_REPORT" ]]; then
+            echo "::error::Expected report was not generated: $AUTHORS_REPORT"
             exit 1
           fi
 
-          if [ ! -f "repositorio-${{ matrix.id }}.json" ]; then
-            echo "::error::No se generó repositorio-${{ matrix.id }}.json"
+          if [[ ! -f "$REPOSITORY_REPORT" ]]; then
+            echo "::error::Expected report was not generated: $REPOSITORY_REPORT"
             exit 1
           fi
 
-      - name: Mostrar reporte de autores
+          echo "Both reports were generated successfully."
+
+
+      - name: Display author report
+        shell: bash
+
         run: |
-          echo "=========================================="
-          echo "REPORTE DE AUTORES - ${{ matrix.id }}"
-          echo "=========================================="
-          cat "autores-${{ matrix.id }}.json"
+          set -euo pipefail
 
-      - name: Mostrar reporte del repositorio
+          echo "=========================================="
+          echo "AUTHOR REPORT - ${{ matrix.id }}"
+          echo "=========================================="
+
+          # json.tool also verifies that the generated file
+          # contains valid JSON.
+          python -m json.tool "authors-${{ matrix.id }}.json"
+
+
+      - name: Display repository report
+        shell: bash
+
         run: |
-          echo "=========================================="
-          echo "REPORTE DEL REPOSITORIO - ${{ matrix.id }}"
-          echo "=========================================="
-          cat "repositorio-${{ matrix.id }}.json"
+          set -euo pipefail
 
-      # ==========================================
-      # 4. EJECUTAR CALIFICADOR
-      # ==========================================
-      #
-      # Esta parte está desactivada para no gastar
-      # tokens de la API.
-      #
-      # Para activarla, descomenta ambos pasos.
+          echo "=========================================="
+          echo "REPOSITORY REPORT - ${{ matrix.id }}"
+          echo "=========================================="
 
-      # - name: Instalar dependencias del calificador
+          python -m json.tool "repository-${{ matrix.id }}.json"
+
+
+      # ========================================================
+      # 4. RUN AUTOMATED GRADER
+      # ========================================================
+      #
+      # The automated AI grader is temporarily disabled to avoid
+      # consuming API tokens during development and testing.
+      #
+      # Uncomment both steps below when grading is enabled.
+      # ========================================================
+
+      # - name: Install grader dependencies
       #   run: |
       #     python -m pip install --upgrade pip
       #     python -m pip install openai
 
-      # - name: Verificar y evaluar archivo
+
+      # - name: Run automated grader
       #   env:
       #     DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       #     STUDENT_ID: ${{ matrix.id }}
       #     STUDENT_REPOSITORY: ${{ matrix.repository }}
-      #     AUTHORS_REPORT: autores-${{ matrix.id }}.json
-      #     REPOSITORY_REPORT: repositorio-${{ matrix.id }}.json
+      #     AUTHORS_REPORT: authors-${{ matrix.id }}.json
+      #     REPOSITORY_REPORT: repository-${{ matrix.id }}.json
+      #
       #   run: |
-      #     python calificador/.github/classroom/grader.py \
-      #       --repository estudiante \
-      #       --required-files src/main/java/com/skillstack/devhub/builder/ProgressBuilder.java
+      #     python grader/.github/classroom/grader.py \
+      #       --repository student \
+      #       --required-files \
+      #       src/main/java/com/skillstack/devhub/builder/ProgressBuilder.java
 
-      # ==========================================
-      # 5. SUBIR ARTEFACTOS
-      # ==========================================
 
-      - name: Guardar reporte de autores
-        uses: actions/upload-artifact@v4
+      # ========================================================
+      # 5. UPLOAD REPORT ARTIFACTS
+      # ========================================================
+
+      - name: Upload author report
+        uses: actions/upload-artifact@v5
         with:
-          name: autores-${{ matrix.id }}
-          path: autores-${{ matrix.id }}.json
+          name: authors-${{ matrix.id }}
+          path: authors-${{ matrix.id }}.json
           if-no-files-found: error
 
-      - name: Guardar reporte del repositorio
-        uses: actions/upload-artifact@v4
+
+      - name: Upload repository report
+        uses: actions/upload-artifact@v5
         with:
-          name: repositorio-${{ matrix.id }}
-          path: repositorio-${{ matrix.id }}.json
+          name: repository-${{ matrix.id }}
+          path: repository-${{ matrix.id }}.json
           if-no-files-found: error
 
-      # Artefacto del grader desactivado mientras
-      # el calificador esté comentado.
 
-      # - name: Guardar resultado del grader
+      # The grader result artifact remains disabled while
+      # the automated grader itself is disabled.
+
+      # - name: Upload grader result
       #   if: always()
-      #   uses: actions/upload-artifact@v4
+      #   uses: actions/upload-artifact@v5
       #   with:
-      #     name: resultado-${{ matrix.id }}
-      #     path: resultado.json
+      #     name: result-${{ matrix.id }}
+      #     path: result.json
       #     if-no-files-found: warn
