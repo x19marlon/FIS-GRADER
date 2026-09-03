@@ -1,50 +1,62 @@
 # ============================================================
 # Student Grader Workflow
-# Version: 1.3
+# Version: 1.3.0
 # ============================================================
 
 name: Student Grader
 
 on:
-  # Allows the workflow to be triggered manually from GitHub Actions.
+  # Allows the workflow to be triggered manually.
   workflow_dispatch:
 
-  # Runs automatically every Monday at 9:00 a.m. in Colombia.
+  # Runs every Monday at 9:00 a.m. Colombia time.
   schedule:
     - cron: "0 9 * * 1"
       timezone: "America/Bogota"
 
 
-# Apply the minimum permissions required by this workflow.
+# ============================================================
+# Permissions
+# ============================================================
+
 permissions:
   contents: read
 
 
-# Centralized configuration values make future changes easier.
+# ============================================================
+# Global Configuration
+# ============================================================
+
 env:
   PYTHON_VERSION: "3.12"
-  REPORT_DAYS: "65"
+  REPORT_DAYS: "7"
+  MONGODB_DATABASE: "fis_grader"
 
+
+# ============================================================
+# Jobs
+# ============================================================
 
 jobs:
-  grade:
-    name: Grade ${{ matrix.id }}
+  analyze:
+    name: Analyze ${{ matrix.id }}
+
     runs-on: ubuntu-latest
 
     # Prevent a faulty process from running indefinitely.
     timeout-minutes: 15
 
     strategy:
-      # A failure in one student repository must not stop
-      # the evaluation of the remaining repositories.
+      # A failure in one group must not stop the remaining groups.
       fail-fast: false
 
       matrix:
         include:
+
           - id: G1
             repository: puj-course/FIS_2630_1204_G1
-          
-          - id: G2 
+
+          - id: G2
             repository: puj-course/FIS_2630_1204_G2
 
           - id: G3
@@ -62,25 +74,29 @@ jobs:
 
       - name: Check out grader repository
         uses: actions/checkout@v7
+
         with:
           path: grader
 
-          # The workflow only needs read access.
-          # Credentials are not required after checkout.
+          # Credentials are not needed after checkout.
           persist-credentials: false
 
 
       - name: Check out student repository
         uses: actions/checkout@v7
+
         with:
           repository: ${{ matrix.repository }}
+
+          # PAT with read access to the student repositories.
           token: ${{ secrets.STUDENT_REPOS_TOKEN }}
+
           path: student
 
-          # Full history is required to analyze commit activity.
+          # Full history is required for commit analysis.
           fetch-depth: 0
 
-          # Avoid leaving the PAT available to later workflow steps.
+          # Do not persist the PAT after checkout.
           persist-credentials: false
 
 
@@ -90,6 +106,7 @@ jobs:
 
       - name: Set up Python
         uses: actions/setup-python@v7
+
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -99,11 +116,22 @@ jobs:
 
 
       # ========================================================
-      # 3. GENERATE COMMIT REPORTS
+      # 3. INSTALL REPORTING DEPENDENCIES
+      # ========================================================
+
+      - name: Install reporting dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pymongo dnspython
+
+
+      # ========================================================
+      # 4. LOCATE COMMIT REPORTER
       # ========================================================
 
       - name: Locate commit analysis script
         id: locate-script
+
         shell: bash
 
         run: |
@@ -112,9 +140,6 @@ jobs:
           echo "Available files in the grader repository:"
           find grader -type f -print | sort
 
-          # Support either accepted script name.
-          # -print -quit avoids unnecessarily scanning the entire tree
-          # after a valid script has been found.
           SCRIPT="$(
             find grader \
               -type f \
@@ -127,15 +152,18 @@ jobs:
           )"
 
           if [[ -z "$SCRIPT" ]]; then
-            echo "::error::Neither commit_report.py nor commit_counter.py was found in the grader repository."
+            echo "::error::Neither commit_report.py nor commit_counter.py was found."
             exit 1
           fi
 
           echo "Commit analysis script found: $SCRIPT"
 
-          # Expose the script path to subsequent workflow steps.
           echo "script=$SCRIPT" >> "$GITHUB_OUTPUT"
 
+
+      # ========================================================
+      # 5. GENERATE COMMIT REPORTS
+      # ========================================================
 
       - name: Generate commit reports
         shell: bash
@@ -150,6 +178,10 @@ jobs:
             --repository-output "repository-${{ matrix.id }}.json"
 
 
+      # ========================================================
+      # 6. VALIDATE GENERATED REPORTS
+      # ========================================================
+
       - name: Validate generated reports
         shell: bash
 
@@ -160,7 +192,12 @@ jobs:
           REPOSITORY_REPORT="repository-${{ matrix.id }}.json"
 
           echo "Generated JSON files:"
-          find . -maxdepth 2 -type f -name "*.json" -print | sort
+          find . \
+            -maxdepth 2 \
+            -type f \
+            -name "*.json" \
+            -print \
+            | sort
 
           if [[ ! -f "$AUTHORS_REPORT" ]]; then
             echo "::error::Expected report was not generated: $AUTHORS_REPORT"
@@ -172,8 +209,16 @@ jobs:
             exit 1
           fi
 
-          echo "Both reports were generated successfully."
+          # Validate JSON syntax before persisting anything.
+          python -m json.tool "$AUTHORS_REPORT" > /dev/null
+          python -m json.tool "$REPOSITORY_REPORT" > /dev/null
 
+          echo "Both reports are valid JSON files."
+
+
+      # ========================================================
+      # 7. DISPLAY REPORTS
+      # ========================================================
 
       - name: Display author report
         shell: bash
@@ -185,9 +230,8 @@ jobs:
           echo "AUTHOR REPORT - ${{ matrix.id }}"
           echo "=========================================="
 
-          # json.tool also verifies that the generated file
-          # contains valid JSON.
-          python -m json.tool "authors-${{ matrix.id }}.json"
+          python -m json.tool \
+            "authors-${{ matrix.id }}.json"
 
 
       - name: Display repository report
@@ -200,22 +244,47 @@ jobs:
           echo "REPOSITORY REPORT - ${{ matrix.id }}"
           echo "=========================================="
 
-          python -m json.tool "repository-${{ matrix.id }}.json"
+          python -m json.tool \
+            "repository-${{ matrix.id }}.json"
 
 
       # ========================================================
-      # 4. RUN AUTOMATED GRADER
+      # 8. PERSIST REPORTS IN MONGODB ATLAS
+      # ========================================================
+
+      - name: Persist reports in MongoDB Atlas
+        shell: bash
+
+        env:
+          # Stored securely in GitHub Actions Secrets.
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+        run: |
+          set -euo pipefail
+
+          python grader/src/classroom/persist_reports.py \
+            --authors-report "authors-${{ matrix.id }}.json" \
+            --repository-report "repository-${{ matrix.id }}.json" \
+            --group-id "${{ matrix.id }}" \
+            --repository "${{ matrix.repository }}" \
+            --database "$MONGODB_DATABASE" \
+            --github-run-id "${{ github.run_id }}" \
+            --github-run-attempt "${{ github.run_attempt }}" \
+            --github-workflow "${{ github.workflow }}"
+
+
+      # ========================================================
+      # 9. AUTOMATED AI GRADER
       # ========================================================
       #
-      # The automated AI grader is temporarily disabled to avoid
-      # consuming API tokens during development and testing.
+      # Temporarily disabled to avoid consuming API tokens.
       #
-      # Uncomment both steps below when grading is enabled.
+      # Uncomment the following steps when the automated
+      # source-code evaluation is ready to be enabled.
       # ========================================================
 
-      # - name: Install grader dependencies
+      # - name: Install AI grader dependencies
       #   run: |
-      #     python -m pip install --upgrade pip
       #     python -m pip install openai
 
 
@@ -228,38 +297,55 @@ jobs:
       #     REPOSITORY_REPORT: repository-${{ matrix.id }}.json
       #
       #   run: |
-      #     python grader/.github/classroom/grader.py \
+      #     python grader/src/grader.py \
       #       --repository student \
       #       --required-files \
       #       src/main/java/com/skillstack/devhub/builder/ProgressBuilder.java
 
 
       # ========================================================
-      # 5. UPLOAD REPORT ARTIFACTS
+      # 10. UPLOAD REPORT ARTIFACTS
+      # ========================================================
+      #
+      # Artifacts are uploaded even if MongoDB persistence fails.
+      # This preserves the generated reports for troubleshooting.
       # ========================================================
 
       - name: Upload author report
-        uses: actions/upload-artifact@v5
+        if: always()
+
+        uses: actions/upload-artifact@v7
+
         with:
           name: authors-${{ matrix.id }}
+
           path: authors-${{ matrix.id }}.json
+
           if-no-files-found: error
 
 
       - name: Upload repository report
-        uses: actions/upload-artifact@v5
+        if: always()
+
+        uses: actions/upload-artifact@v7
+
         with:
           name: repository-${{ matrix.id }}
+
           path: repository-${{ matrix.id }}.json
+
           if-no-files-found: error
 
 
-      # The grader result artifact remains disabled while
-      # the automated grader itself is disabled.
+      # ========================================================
+      # AI GRADER ARTIFACT
+      # ========================================================
 
       # - name: Upload grader result
       #   if: always()
-      #   uses: actions/upload-artifact@v5
+      #
+      #   uses: actions/upload-artifact@v7
+      #
       #   with:
       #     name: result-${{ matrix.id }}
       #     path: result.json
