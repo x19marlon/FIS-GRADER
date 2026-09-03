@@ -262,7 +262,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          python grader/src/persist_reports.py \
+          python grader/src/classroom/persist_reports.py \
             --authors-report "authors-${{ matrix.id }}.json" \
             --repository-report "repository-${{ matrix.id }}.json" \
             --group-id "${{ matrix.id }}" \
