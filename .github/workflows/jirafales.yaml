@@ -44,8 +44,7 @@ jobs:
           - id: G1
             repository: puj-course/FIS_2630_1204_G1
           
-          - id: G2 - id: G3
-            repository: puj-course/FIS_2630_1204_G3
+          - id: G2 
             repository: puj-course/FIS_2630_1204_G2
 
           - id: G3
