@@ -29,7 +29,7 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
-  REPORT_DAYS: "7"
+  REPORT_DAYS: "90"
   MONGODB_DATABASE: "fis_grader"
 
 
