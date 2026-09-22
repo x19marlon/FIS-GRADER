@@ -14,12 +14,15 @@ Available commands:
     /history <group>
     /student <email>
     /excel <group>
+    /ask <question>
 """
 
 import logging
 import os
+import sys
 import xlsxwriter
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from pymongo import AsyncMongoClient, DESCENDING
@@ -31,6 +34,13 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
 )
+
+# ``python src/telegram/bot.py`` makes ``src/telegram`` the import root.
+# Add the project root so the RAG package is available with the documented
+# launch command, without changing the rest of the project's layout.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 # ============================================================
@@ -1170,6 +1180,7 @@ async def start_command(
         "/commits G1\n"
         "/history G1\n"
         "/student email@example.com\n"
+        "/ask ¿Cuál es el puntaje máximo de la rúbrica?\n"
         "/whoami"
     )
 
@@ -1639,6 +1650,66 @@ async def excel_command(
             "Generated from the latest MongoDB data."
         ),
     )
+
+
+# ============================================================
+# Rubric RAG
+# ============================================================
+
+async def ask_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Answer a question using the locally indexed grading rubric."""
+
+    if not await is_authorized(update):
+        return
+
+    if update.effective_message is None:
+        return
+
+    question = " ".join(context.args).strip()
+    if not question:
+        await update.effective_message.reply_text(
+            "Usage:\n/ask ¿Cuál es el puntaje máximo de la rúbrica?"
+        )
+        return
+
+    try:
+        # RAG dependencies/configuration failures must not prevent bot startup.
+        from src.rag.service import ask_rag
+        from src.rag.ollama import OllamaError
+
+        try:
+            answer = await ask_rag(question)
+        except OllamaError as error:
+            await update.effective_message.reply_text(str(error))
+            return
+
+    except ValueError as error:
+        await update.effective_message.reply_text(str(error))
+        return
+
+    except RuntimeError as error:
+        LOGGER.warning("RAG request could not be completed: %s", error)
+        await update.effective_message.reply_text(
+            "No puedo consultar la rúbrica todavía. "
+            "Verifica que el índice esté creado y que Ollama esté disponible con GPU."
+        )
+        return
+
+    except Exception:
+        LOGGER.exception("Failed to answer RAG question.")
+        await update.effective_message.reply_text(
+            "Ocurrió un error al consultar la rúbrica."
+        )
+        return
+
+    # Stay below Telegram's 4096-character limit, including astral Unicode.
+    for offset in range(0, len(answer), 2000):
+        await update.effective_message.reply_text(answer[offset:offset + 2000])
+
+
 # ============================================================
 # Error Handler
 # ============================================================
@@ -1746,11 +1817,18 @@ def main() -> None:
     )
 
     application.add_handler(
-    CommandHandler(
-        "excel",
-        excel_command,
+        CommandHandler(
+            "excel",
+            excel_command,
+        )
     )
-)
+
+    application.add_handler(
+        CommandHandler(
+            "ask",
+            ask_command,
+        )
+    )
 
     application.add_error_handler(
         error_handler

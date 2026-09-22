@@ -1,0 +1,7 @@
+# This implementation uses the v1 managed LanceDB target API.
+cocoindex[sentence_transformers,lancedb]>=1.0.24,<2
+dnspython
+openai
+pymongo
+python-telegram-bot
+XlsxWriter
